@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Ocupabilidad</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #17212b);
+    --fg: var(--tg-theme-text-color, #ffffff);
+    --hint: var(--tg-theme-hint-color, #8b9aae);
+    --btn: var(--tg-theme-button-color, #2ea6ff);
+    --btn-fg: var(--tg-theme-button-text-color, #ffffff);
+    --card: var(--tg-theme-secondary-bg-color, #232e3c);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--fg);
+    padding: 12px; padding-bottom: 90px;
+  }
+  h1 { font-size: 18px; margin-bottom: 4px; }
+  .sub { color: var(--hint); font-size: 12px; margin-bottom: 14px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+  .tab {
+    flex: 1; padding: 10px; text-align: center; border-radius: 10px;
+    background: var(--card); color: var(--hint); font-weight: 600; font-size: 14px;
+    cursor: pointer; border: 1px solid transparent;
+  }
+  .tab.active { color: var(--btn-fg); background: var(--btn); }
+  .card {
+    background: var(--card); border-radius: 14px; padding: 14px; margin-bottom: 12px;
+  }
+  label { font-size: 12px; color: var(--hint); display: block; margin: 10px 0 4px; }
+  input[type=date], select {
+    width: 100%; padding: 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,.08);
+    background: var(--bg); color: var(--fg); font-size: 15px;
+  }
+  .btn {
+    width: 100%; padding: 13px; border: 0; border-radius: 12px;
+    background: var(--btn); color: var(--btn-fg);
+    font-size: 15px; font-weight: 700; margin-top: 14px; cursor: pointer;
+  }
+  .btn.sec { background: transparent; border: 1px solid var(--btn); color: var(--btn); }
+  .btn:disabled { opacity: .5; }
+  .nav-btn {
+    width: 40px; height: 34px; border-radius: 10px; border: 1px solid rgba(255,255,255,.12);
+    background: transparent; color: var(--fg); font-size: 18px; cursor: pointer;
+  }
+  .heatmap-dia {
+    aspect-ratio: 1; border-radius: 6px; display: flex; align-items: center; justify-content: center;
+    font-size: 10px; color: var(--hint); background: rgba(255,255,255,.05);
+  }
+  .hm-ok { background: rgba(49,181,69,.45); color: #d9ffe0; }
+  .hm-parcial { background: rgba(245,166,35,.45); color: #fff3d6; }
+  .hm-domingo { opacity: .25; }
+  .toast {
+    position: fixed; bottom: 100px; left: 12px; right: 12px; padding: 12px 14px;
+    border-radius: 12px; background: var(--card); color: var(--fg); font-size: 14px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.4); display: none; z-index: 9;
+  }
+  .toast.ok { border-left: 4px solid #31b545; }
+  .toast.err { border-left: 4px solid #e05b4c; }
+  .estado-pill {
+    display: inline-block; padding: 4px 10px; border-radius: 99px; font-size: 12px; font-weight: 600;
+  }
+  .pill-ok { background: rgba(49,181,69,.15); color: #31b545; }
+  .pill-no { background: rgba(224,91,76,.15); color: #e05b4c; }
+  .chart-wrap { height: 240px; margin-top: 8px; }
+  .resumen { display: flex; gap: 8px; margin-bottom: 12px; }
+  .resumen .card { flex: 1; text-align: center; padding: 10px 6px; margin: 0; }
+  .resumen .num { font-size: 22px; font-weight: 800; }
+  .resumen .lbl { font-size: 11px; color: var(--hint); }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <h1>📋 Ocupabilidad</h1>
+  <div class="sub">Registro de horas — Implementación SGC</div>
+
+  <div class="tabs">
+    <div class="tab active" id="tab-reg" onclick="showTab('reg')">✏️ Registrar</div>
+    <div class="tab" id="tab-rep" onclick="showTab('rep')">📊 Reportes</div>
+  </div>
+
+  <!-- REGISTRAR -->
+  <div id="panel-reg">
+    <div class="card">
+      <label>Fecha a registrar</label>
+      <input type="date" id="fecha">
+      <div style="margin-top:10px">
+        Estado: <span class="estado-pill pill-no" id="estado-pill">verificando…</span>
+      </div>
+      <label>Horas asignadas</label>
+      <select id="horas">
+        <option value="8">8 horas (jornada completa)</option>
+        <option value="4">4 horas (media jornada)</option>
+      </select>
+      <button class="btn" id="btn-prev" onclick="previsualizar()">🔍 Previsualizar</button>
+      <button class="btn" id="btn-reg" onclick="registrar(false)" disabled>✅ Registrar en la base</button>
+      <div class="sub" id="prev-out" style="margin-top:10px"></div>
+    </div>
+  </div>
+
+  <!-- REPORTES -->
+  <div id="panel-rep" class="hidden">
+    <div class="card">
+      <div style="display:flex; align-items:center; gap:8px">
+        <button class="nav-btn" onclick="cambiarMes(-1)">‹</button>
+        <div style="flex:1; text-align:center; font-weight:700" id="lbl-mes">–</div>
+        <button class="nav-btn" onclick="cambiarMes(1)">›</button>
+      </div>
+    </div>
+    <div class="resumen">
+      <div class="card"><div class="num" id="r-total-horas">–</div><div class="lbl">horas del equipo</div></div>
+      <div class="card"><div class="num" id="r-mis-dias">–</div><div class="lbl">días que llené</div></div>
+      <div class="card"><div class="num" id="r-analistas">–</div><div class="lbl">analistas</div></div>
+    </div>
+    <div class="card">
+      <div class="sub">Horas por analista</div>
+      <div class="chart-wrap"><canvas id="ch-horas"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="sub">Distribución de horas</div>
+      <div class="chart-wrap"><canvas id="ch-donut"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="sub">Días que llenó (de X del mes)</div>
+      <div class="chart-wrap"><canvas id="ch-dias"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="sub">Evolución diaria (por analista)</div>
+      <div class="chart-wrap"><canvas id="ch-evo"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="sub">🗓️ Mi calendario de registro</div>
+      <div id="heatmap" style="display:grid; grid-template-columns: repeat(7, 1fr); gap:4px"></div>
+      <div class="sub" style="margin-top:8px">🟩 8h completo · 🟨 parcial · ⬜ sin registro</div>
+    </div>
+    <div class="card">
+      <div class="sub">Tabla resumen por analista</div>
+      <table id="tabla-resumen" style="width:100%; font-size:12px; border-collapse:collapse">
+        <thead><tr id="tabla-head"></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>
