@@ -1,0 +1,25 @@
+# Local Pi runtime state
+.atl/
+
+# Secrets — NUNCA commitear
+.env
+
+# Runtime logs
+*.log
+
+# Python
+__pycache__/
+*.pyc
+
+# Binarios y runtime del tunel
+tools/
+tmp/
+.tmp*
+.tmp_*
+
+# Test junk
+_test_*.py
+
+# Net scan runtime data
+net_nombres.json
+odd/
