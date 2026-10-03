@@ -10,13 +10,42 @@ Asistente personal con dos mitades que se completan:
    Telegram para registrar horas en la base SQL Server corporativa, con reportes,
    gráficos y comparativas por analista.
 
+**Dos canales, una laptop:** los *mensajes* del chat pasan por el bot; la *Mini App*
+viaja por un túnel Cloudflare hasta el servidor Flask. El watchdog revive todo lo
+que se caiga.
+
+```mermaid
+flowchart LR
+    subgraph phone["📱 Teléfono"]
+        TG[Telegram]
+    end
+
+    subgraph laptop["💻 Laptop"]
+        BOT[bot.py<br>polling]
+        RPC["gentle-shell (Pi)<br>sesión persistente"]
+        MOD["apps · VPN · disco<br>red · pantalla · bloqueo"]
+        CF[cloudflared<br>quick tunnel]
+        API["mini_app_server.py<br>Flask :5577"]
+        WD[watchdog.py]
+    end
+
+    DB[(SQL Server)]
+
+    TG -- "mensajes / comandos" --> BOT
+    BOT -- "tareas complejas<br>(proceso RPC)" --> RPC
+    BOT --- MOD
+    TG -- "Mini App\ndefinida como WebApp" --> CF
+    CF -- "HTTPS" --> API
+    API --> DB
+    WD -. "revive si muere" .-> BOT
+    WD -.-> CF
+    WD -.-> API
 ```
-📱 Cel (Telegram) ──polling──> bot.py ──RPC──> gentle-shell (Pi) ──> tu laptop
-                                  │
-        Mini App (Telegram) ──túnel Cloudflare──> mini_app_server.py (:5577) ──> SQL Server
-                                  │
-                          watchdog.py (revive todo si muere)
-```
+
+> En GitHub este diagrama se dibuja solo (Mermaid nativo). Si lo leés en texto
+> plano: Telegram ⇄ bot.py ⇄ gentle-shell para el chat, y Telegram → cloudflared
+> → mini_app_server.py → SQL Server para la Mini App, con watchdog.py
+> supervisor de los tres servicios de la laptop.
 
 ## Estructura del proyecto
 
