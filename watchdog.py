@@ -157,13 +157,20 @@ def registrar_boton(url: str):
 
 
 def lanzar_server():
-    subprocess.Popen(
-        ["powershell", "-NoProfile", "-Command",
-         f"Start-Process -WindowStyle Hidden '{PY}' -ArgumentList 'mini_app_server.py' "
-         f"-WorkingDirectory '{BASE}'"],
-        creationflags=subprocess.CREATE_NO_WINDOW,
-    )
-    log("mini_app_server relanzado")
+    """Directo desde Python con logs capturados: sin stderr invisible ya no
+    comemos 500 sin rastro (incidente del 07/10 en /api/estado)."""
+    try:
+        out = open(BASE / "tools" / "miniapp_out.log", "w", encoding="utf-8", errors="replace")
+        err = open(BASE / "tools" / "miniapp_err.log", "w", encoding="utf-8", errors="replace")
+        subprocess.Popen(
+            [PY, "mini_app_server.py"], cwd=str(BASE),
+            stdout=out, stderr=err,
+            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
+            close_fds=False,
+        )
+        log("mini_app_server relanzado")
+    except Exception as e:
+        log(f"error lanzando server: {e}")
 
 
 def lanzar_tunel():
