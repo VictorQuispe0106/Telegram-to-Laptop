@@ -16,8 +16,14 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 BASE = Path(r"C:\Users\E758455\Desktop\Opencode-proyects\APP TELEGRAM")
-PY = r"C:\Users\E758455\AppData\Local\Microsoft\WindowsApps\python.exe"
-TUNNEL_LOG = BASE / "tools" / "tunel_err.log"
+# Alias de WindowsApps puede quedar roto tras un reboot (0x80070002): preferir
+# el shim real del gestor de Python si existe.
+_PY_CANDIDATOS = (
+    r"C:\Users\E758455\AppData\Local\Python\bin\python.exe",
+    r"C:\Users\E758455\AppData\Local\Microsoft\WindowsApps\python.exe",
+)
+PY = next((p for p in _PY_CANDIDATOS if Path(p).exists()), _PY_CANDIDATOS[0])
+TUNNEL_LOG = BASE / "tools" / "pinggy_out.log"
 INTERVALO = 300
 
 sys.path.insert(0, BASE.as_posix())
@@ -57,24 +63,40 @@ def hay_proceso(fragmento: str) -> bool:
     return False
 
 
-def matar_cloudflared():
+def matar_tunel():
+    """Mata zombis: ssh de pinggy vivo con tunel muerto, o cloudflared legacy."""
     import psutil
-    for p in psutil.process_iter(["name"]):
+    for p in psutil.process_iter(["name", "cmdline"]):
         try:
-            if p.info["name"] and p.info["name"].lower() == "cloudflared.exe":
+            nombre = (p.info["name"] or "").lower()
+            cmd = " ".join(p.info["cmdline"] or []).lower()
+            es_pinggy = nombre == "ssh.exe" and "a.pinggy.io" in cmd
+            es_cloudflared = nombre == "cloudflared.exe"
+            if es_pinggy or es_cloudflared:
                 p.kill()
-                log(f"cloudflared zombi {p.pid} matado")
+                log(f"tunel zombi {p.pid} ({nombre}) matado")
         except Exception:
             pass
 
 
 def url_del_tunel() -> str:
-    """Recupera la URL del ultimo log del tunel (o None)."""
+    """Recupera la URL del ultimo log del tunel (out y err, o '')."""
     try:
         texto = TUNNEL_LOG.read_text(encoding="utf-8", errors="ignore")
+        try:
+            texto += "\n" + (BASE / "tools" / "pinggy_err.log").read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            pass
         import re
-        m = re.findall(r"https://[a-z0-9-]+\.trycloudflare\.com", texto)
-        return m[-1] if m else ""
+        patrones = (
+            r"https://[a-z0-9-]+\.(?:run\.pinggy-free\.link|free\.pinggy\.net|a\.pinggy\.io)",
+            r"https://[a-z0-9-]+\.trycloudflare\.com",
+        )
+        for patron in patrones:
+            urls = re.findall(patron, texto)
+            if urls:
+                return urls[-1]
+        return ""
     except Exception:
         return ""
 
@@ -145,18 +167,42 @@ def lanzar_server():
 
 
 def lanzar_tunel():
+    """Tunel Pinggy por SSH sobre el puerto 443 (la red bloquea el 7844 de
+    Cloudflare). Sesion free de 60 min: el propio ciclo la renueva.
+    Se lanza DIRECTO desde Python (sin PowerShell intermediario): los logs
+    quedan closetos conectados al hijo y url_del_tunel los ve siempre."""
+    ssh = r"C:\Program Files\Git\usr\bin\ssh.exe"
+    try:
+        out = open(TUNNEL_LOG, "w", encoding="utf-8", errors="replace")
+        err = open(BASE / "tools" / "pinggy_err.log", "w", encoding="utf-8", errors="replace")
+        subprocess.Popen(
+            [ssh, "-p", "443", "-T", "-o", "StrictHostKeyChecking=no",
+             "-o", "ServerAliveInterval=30", "-R0:localhost:5577", "a.pinggy.io"],
+            stdout=out, stderr=err,
+            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
+            close_fds=False,
+        )
+        log("tunel pinggy relanzado")
+    except Exception as e:
+        log(f"error lanzando tunel: {e}")
+
+
+def lanzar_bot():
     subprocess.Popen(
         ["powershell", "-NoProfile", "-Command",
-         f"Start-Process -WindowStyle Hidden '{BASE / 'tools' / 'cloudflared.exe'}' "
-         f"-ArgumentList 'tunnel','--url','http://localhost:5577' "
-         f"-RedirectStandardError '{TUNNEL_LOG}' "
-         f"-RedirectStandardOutput '{BASE / 'tools' / 'tunel_out.log'}'"],
+         f"Start-Process -WindowStyle Hidden '{PY}' -ArgumentList 'bot.py' "
+         f"-WorkingDirectory '{BASE}'"],
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
-    log("cloudflared relanzado")
+    log("bot.py relanzado")
 
 
 def ciclo():
+    # 0. bot de telegram: si el proceso murio en crudo, revivirlo
+    if not hay_proceso("bot.py"):
+        log("bot MUERTO -> relanzando")
+        lanzar_bot()
+        time.sleep(10)
     # 1. server local
     if http_ok("http://127.0.0.1:5577/", timeout=8) is None:
         log("server MUERTO -> relanzando")
@@ -167,9 +213,9 @@ def ciclo():
     tunel_ok = bool(url) and http_ok(f"{url}/", timeout=15) is not None
     if not tunel_ok:
         log(f"tunel sin respuesta ({url or 'sin URL'}) -> relanzando")
-        matar_cloudflared()          # zombi: proceso vivo, tunel muerto
+        matar_tunel()               # zombi: proceso vivo, tunel muerto
         lanzar_tunel()
-        time.sleep(15)
+        time.sleep(25)
         url = url_del_tunel()
     # 3. re-registrar si la url cambio
     if url and url != url_registrada():
@@ -178,6 +224,19 @@ def ciclo():
 
 
 def main():
+    # dedupe: solo un watchdog (evita instancias dobles via tarea de logon + manual,
+    # que en cascada podrian lanzar 2 bot.py -> conflicto 409 de Telegram)
+    import psutil
+    me_pid = os.getpid()
+    for p in psutil.process_iter(["name", "cmdline", "pid"]):
+        try:
+            if (p.info["name"] and p.info["name"].lower() == "python.exe"
+                    and p.info["pid"] != me_pid
+                    and "watchdog.py" in " ".join(p.info["cmdline"] or [])):
+                log(f"watchdog duplicado (pid {p.info['pid']}) -> salgo sin luchar")
+                return
+        except Exception:
+            pass
     log("watchdog iniciado")
     while True:
         try:
