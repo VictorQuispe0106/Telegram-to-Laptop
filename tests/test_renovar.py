@@ -55,6 +55,9 @@ check("/renovar exige allowed()", "if not allowed(m.from_user.id)" in renovar_sr
 check("/renovar llama a watchdog.renovar_tunel", "watchdog.renovar_tunel()" in renovar_src)
 check("/renovar responde con el link nuevo", "Link renovado" in renovar_src)
 check("/renovar avisa si falló", "No pude recuperar la URL" in renovar_src)
+bot_src = open("bot.py", encoding="utf-8").read()
+check("set_my_commands registra el menú '/'", "set_my_commands" in bot_src)
+check("/renovar está en el menú '/'", 'BotCommand("renovar"' in bot_src)
 
 # ---------- 4) el catch-all no tapea /renovar ----------
 if isinstance(bot.bot.message_handlers[0], dict):

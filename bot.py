@@ -1171,11 +1171,41 @@ def _enviar_alerta(texto: str, silenciosa: bool = False):
             pass
 
 
+def registrar_comandos_menu():
+    """Registra el menú '/' de Telegram (autocomplete). Sin set_my_commands el
+    comando responde igual, pero NO aparece al escribir / en el chat.
+    Aislado en try/except: un error acá no debe impedir el arranque del bot."""
+    try:
+        bot.set_my_commands([
+            telebot.types.BotCommand("start", "Ayuda y lista de comandos"),
+            telebot.types.BotCommand("estado", "Estado del asistente (RPC)"),
+            telebot.types.BotCommand("status", "Tarjeta de estado del sistema"),
+            telebot.types.BotCommand("top", "Procesos con más CPU"),
+            telebot.types.BotCommand("apps", "Apps abiertas"),
+            telebot.types.BotCommand("nombra", "Nombrar ventana activa"),
+            telebot.types.BotCommand("quienhay", "Ventanas abiertas"),
+            telebot.types.BotCommand("traer", "Traer ventana al frente"),
+            telebot.types.BotCommand("foto", "Captura de pantalla"),
+            telebot.types.BotCommand("bloquear", "Bloquear la laptop"),
+            telebot.types.BotCommand("forzar_cerrar", "Cerrar una app forzadamente"),
+            telebot.types.BotCommand("limpiar", "Limpiar disco (preview)"),
+            telebot.types.BotCommand("vpn", "Estado de la VPN"),
+            telebot.types.BotCommand("renovar", "Renovar el link de la Mini App"),
+            telebot.types.BotCommand("reset", "Sesión nueva del agente"),
+            telebot.types.BotCommand("compact", "Compactar sesión del agente"),
+            telebot.types.BotCommand("id", "Ver tu user ID"),
+        ])
+        log.info("menú de comandos '/' registrado en Telegram")
+    except Exception as e:
+        log.error("set_my_commands: %s", e)
+
+
 if __name__ == "__main__":
     log.info("🕷️ SpiderVic Assistant v4 online — sesión %s | whitelist %s",
              SESSION_ID, sorted(ALLOWED_IDS) or "VACÍA")
     me = bot.get_me()
     log.info("bot: @%s (id %s)", me.username, me.id)
+    registrar_comandos_menu()
     threading.Thread(target=queue_worker, daemon=True).start()
     threading.Thread(target=_alertas_worker, daemon=True).start()
     bot.infinity_polling(timeout=60, long_polling_timeout=60)
