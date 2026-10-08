@@ -784,7 +784,10 @@ def encolar(chat_id: int, texto: str) -> int:
         return len(_cola)
 
 
-@bot.message_handler(func=lambda m: True, content_types=["text"])
+# FIX: el catch-all SOLO agarra texto que no es comando. Si agarrara
+# "/foto", taparía los handlers específicos de más abajo (orden telebot:
+# gana el primero). Los comandos los atienden sus handlers dedicados.
+@bot.message_handler(func=lambda m: not (m.text or "").strip().startswith("/"), content_types=["text"])
 def on_text(m):
     uid = m.from_user.id
     if not allowed(uid):
