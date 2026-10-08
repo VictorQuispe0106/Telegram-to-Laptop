@@ -52,7 +52,7 @@ flowchart LR
 ```
 APP TELEGRAM/
 ├── bot.py                  # Bot de Telegram: comandos + barra rápida + RPC shell
-├── watchdog.py             # Centinela: revive mini_app_server, cloudflared y bot.py
+├── watchdog.py             # Centinela: revive mini_app_server y bot.py; el túnel se renueva con /renovar
 ├── mini_app_server.py      # Flask :5577 — API de la Mini App (Ocupabilidad)
 ├── apps_control.py         # Listar / abrir / cerrar apps de Windows
 ├── disk_clean.py           # Preview + limpieza de basura en disco
@@ -115,13 +115,13 @@ powershell -ExecutionPolicy Bypass -File scripts\install_cloudflared.ps1
 | Qué | Cómo |
 |---|---|
 | Bot de Telegram | `start_spidervic.cmd` (o `python bot.py`) |
-| Watchdog (Mini App + túnel + bot) | `start_watchdog.cmd` — ponerlo en Startup de Windows |
+| Watchdog (Mini App + bot) | `start_watchdog.cmd` — ponerlo en Startup de Windows |
 | Mini App sola | `python mini_app_server.py` (escucha :5577) |
 | Reinicio ordenado del bot | `python scripts\restart_bot.py` |
 
-El buscador de URL del túnel: cada arranque de cloudflared genera una URL
-`*.trycloudflare.com` nueva; el watchdog la detecta en el log, la persiste en
-`tools/tunel_url.txt` y re-registra el botón la Mini App en tu chat.
+El buscador de URL del túnel (`url_del_tunel`): cada renovación de la sesión
+Pinggy genera una URL nueva; `/renovar` la detecta en el log, la persiste en
+`tools/tunel_url.txt` y re-registra el botón de la Mini App en tu chat.
 
 **Dependencia externa:** `mini_app_server.py` importa `llenar_horas_automatico`
 desde el proyecto hermano `OCUPABILIDAD AUTOMATIZACION` (path absoluto definido
@@ -178,9 +178,15 @@ Requisito para que funcione: SQL Server accesible y el proyecto hermano
 Cada 5 minutos el watchdog (`watchdog.py`):
 
 1. Chequea `http://127.0.0.1:5577/` → si muere, relanza `mini_app_server.py` oculto.
-2. Verifica la URL del túnel → si no responde, mata cloudflared zombis y lo relanza.
-3. Si la URL cambió → guarda `tools/tunel_url.txt` y re-registra el botón en Telegram.
-4. (El bot se auto-reinicia si el proceso crudo muere, vía `scripts/restart_bot.py`.)
+2. (El bot se auto-reinicia si el proceso crudo muere, vía `scripts/restart_bot.py`.)
+
+**El túnel NO se renueva solo.** La sesión free de Pinggy expira a los ~60 min y
+cada renovación automática cambiaba la URL, rompiendo la Mini App sin aviso. La
+renovación es **manual**: mandá `/renovar` al bot → mata túneles zombis, relanza
+la sesión Pinggy, valida la URL nueva, la persiste en `tools/tunel_url.txt`,
+re-registra el botón de la Mini App y te responde con el link nuevo. Mientras
+no se renueve, la Mini App queda muerta tras la expiración (comportamiento
+elegido a propósito).
 
 ## Desarrollo
 

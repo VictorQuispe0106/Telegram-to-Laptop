@@ -43,6 +43,10 @@ import requests
 import telebot
 from dotenv import load_dotenv, find_dotenv
 
+# Módulos locales del proyecto (mismo directorio: script dir ya está en sys.path)
+# watchdog: renovación manual del túnel vía /renovar (sin ciclo propio al importar).
+import watchdog
+
 # ---------- config ----------
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(find_dotenv(str(BASE_DIR / ".env")))
@@ -1000,6 +1004,33 @@ def cmd_limpiar(m):
         return
     _chats_conocidos.add(m.chat.id)
     bot.send_message(m.chat.id, disk_clean.preview(), reply_markup=confirmar_markup("diskclean"))
+
+
+@bot.message_handler(commands=["renovar"])
+def cmd_renovar(m):
+    """Renueva el túnel Pinggy de la Mini App: link nuevo + botón re-registrado.
+    Manual a propósito: la sesión free cambia de URL a los ~60 min y la
+    renovación automática rompía la app sin aviso (feature tunel-renovacion-manual)."""
+    if not allowed(m.from_user.id):
+        return
+    _chats_conocidos.add(m.chat.id)
+    bot.reply_to(m, "🔄 Renovando el túnel de la Mini App (puede tardar ~45s)…")
+    try:
+        import watchdog
+        url = watchdog.renovar_tunel()
+    except Exception as e:
+        log.error("renovar: %s", e)
+        bot.reply_to(m, f"❌ Error renovando el túnel: {e}")
+        return
+    if not url:
+        bot.reply_to(m, "❌ No pude recuperar la URL nueva. Revisá tools/pinggy_out.log "
+                        "o probá de nuevo en un minuto.")
+        return
+    kb = telebot.types.InlineKeyboardMarkup()
+    kb.row(telebot.types.InlineKeyboardButton(
+        "📋 Abrir Ocupabilidad", web_app=telebot.types.WebAppInfo(url=url)))
+    bot.reply_to(m, f"✅ Link renovado:\n{url}", reply_markup=kb)
+    reaccionar(m.chat.id, m.message_id, "🔥")
 
 
 @bot.message_handler(commands=["vpn"])
