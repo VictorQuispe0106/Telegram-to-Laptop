@@ -20,9 +20,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import quick_actions
 
 
-def frame_falso():
-    """Imita un frame de OpenCV: lo unico que el helper valida es .shape."""
-    return types.SimpleNamespace(shape=(480, 640, 3))
+def frame_falso(brillo=200):
+    """Imita un frame de OpenCV: lo unico que el helper valida es .shape.
+
+    .brillo es lo que lee cv2.mean del fake para el detector de modo
+    privacidad (200 = escena normal; 0.0 = shutter electronico cerrado).
+    """
+    return types.SimpleNamespace(shape=(480, 640, 3), brillo=brillo)
 
 
 class FakeCapture:
@@ -102,6 +106,16 @@ class FakeCV2TestBase(unittest.TestCase):
             return True
 
         mod.imwrite = imwrite
+
+        def mean(frame):
+            """Brillo medio del frame (canal B), como cv2.mean real.
+
+            El frame fake trae el brillo en .brillo (default 200: escena
+            normal iluminada, muy lejos del corte de 1.5).
+            """
+            return (getattr(frame, "brillo", 200), 0.0, 0.0, 0.0)
+
+        mod.mean = mean
         sys.modules["cv2"] = mod
         return mod, capturas
 
@@ -204,6 +218,33 @@ class TestCaptureWebcam(FakeCV2TestBase):
         self.assertTrue(Path(ruta).exists())
         self.assertTrue(cap_cerrada.released)
         self.assertTrue(cap1.released)
+
+    def test_h_frame_negro_modo_privacidad(self):
+        """(h) frames validos pero brillo 0 (shutter F8/Vantage) -> RuntimeError
+        con mensaje accionable de modo privacidad, ANTES de guardar la foto.
+
+        Ademas, un frame oscuro pero con brillo por arriba del corte (2.0,
+        tipico de oficina de noche) SI se guarda: el corte no es demasiado
+        agresivo.
+        """
+        frame_negro = frame_falso(brillo=0.0)
+        cap0 = FakeCapture(opens=True, frames=[(True, frame_negro)])
+        mod, caps = self._instalar_fake({(self.CAP_DSHOW, 0): cap0})
+
+        with self.assertRaises(RuntimeError) as ctx:
+            quick_actions.capture_webcam()
+        self.assertIn("modo privacidad", str(ctx.exception))
+        self.assertIn("F8", str(ctx.exception))
+        # no se guardo ni envio foto negra y la cap se libero igual
+        self.assertEqual(self.imwrite_escritos, [])
+        self.assertTrue(cap0.released)
+
+        # y con brillo 2.0 (encima del corte de 1.5) la misma cam guarda bien
+        cap_ok = FakeCapture(opens=True, frames=[(True, frame_falso(brillo=2.0))])
+        self._instalar_fake({(self.CAP_DSHOW, 0): cap_ok})
+        ruta = quick_actions.capture_webcam()
+        self.assertTrue(Path(ruta).exists())
+        self.assertEqual(len(self.imwrite_escritos), 1)
 
 
 if __name__ == "__main__":

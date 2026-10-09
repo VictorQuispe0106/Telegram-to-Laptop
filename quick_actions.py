@@ -157,6 +157,17 @@ def capture_webcam(ruta: str | None = None) -> str:
                 frame = None
 
             if frame is not None:
+                # detector de privacidad: una cam con shutter electronico
+                # (tecla F8 / Lenovo Vantage) abre bien pero entrega frames
+                # 100% negros (brillo medio ~0.0 mientras una escena real, hasta
+                # de noche, queda por arriba de ~2). Corte en 1.5: si da menos,
+                # avisamos ANTES de guardar/mandar una foto inutil.
+                brillo = cv2.mean(frame)[0]
+                if brillo < 1.5:
+                    raise RuntimeError(
+                        "la cámara capturó una foto 100% negra — el sensor está "
+                        "cerrado por modo privacidad (tecla F8 de cámara o Lenovo Vantage)"
+                    )
                 if ruta is None:
                     ruta = str(
                         Path(tempfile.gettempdir())
