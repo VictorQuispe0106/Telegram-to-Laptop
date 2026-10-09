@@ -987,8 +987,27 @@ def cmd_camara(m):
         return
     _chats_conocidos.add(m.chat.id)
     aviso = bot.reply_to(m, "📷 Capturando la webcam… (el LED de la cámara se va a prender)")
+
+    resultado = {}
+    def _capturar():
+        try:
+            resultado["ruta"] = quick_actions.capture_webcam()
+        except Exception as e:
+            resultado["error"] = str(e)
+
+    h = threading.Thread(target=_capturar, daemon=True)
+    h.start()
+    h.join(timeout=45)
+    if h.is_alive():
+        resultado["error"] = "📷 Timeout: la cámara no respondió (¿otra app la tiene?)"
+    if "error" in resultado:
+        try:
+            bot.edit_message_text(f"❌ {resultado['error']}", aviso.chat.id, aviso.message_id)
+        except Exception:
+            bot.reply_to(m, f"❌ {resultado['error']}")
+        return
+    ruta = resultado["ruta"]
     try:
-        ruta = quick_actions.capture_webcam()
         with open(ruta, "rb") as f:
             bot.send_photo(m.chat.id, f, caption="📷 Webcam de la laptop")
         Path(ruta).unlink(missing_ok=True)
