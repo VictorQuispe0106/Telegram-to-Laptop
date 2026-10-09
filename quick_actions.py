@@ -110,3 +110,53 @@ def clipboard_text() -> str:
             ctypes.windll.kernel32.GlobalUnlock(h)
     finally:
         u32.CloseClipboard()
+
+
+# ---------- webcam ----------
+def capture_webcam(ruta: str | None = None) -> str:
+    """Captura una foto de la webcam y devuelve la ruta del JPG.
+
+    El import de cv2 va aca (es pesado y solo se usa si alguien pide /camara).
+    La webcam necesita ~1-2s para estabilizar la exposicion, por eso se
+    descartan los primeros frames antes de tomar la foto final.
+    """
+    import tempfile
+
+    import cv2
+
+    cap = None
+    for idx in (0, 1, 2):
+        cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+        if cap.isOpened():
+            break
+        cap.release()
+        cap = None
+    if cap is None:
+        raise RuntimeError("no se encontró la cámara")
+
+    try:
+        # resolucion deseada (1280x720); si la cam no lo respeta, no pasa nada
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+        # warm-up: descartar los primeros frames para que la exposicion se
+        # estabilice (el LED prende, la imagen inicial sale oscura)
+        frame = None
+        ok = False
+        for _ in range(8):
+            ok, frame = cap.read()
+            time.sleep(0.15)
+
+        if not ok or frame is None:
+            raise RuntimeError("la cámara no devolvió un frame válido")
+
+        if ruta is None:
+            ruta = str(
+                Path(tempfile.gettempdir())
+                / ("spidervic_cam_" + time.strftime("%Y%m%d_%H%M%S") + ".jpg")
+            )
+        if not cv2.imwrite(ruta, frame):
+            raise RuntimeError("no se pudo guardar la foto de la cámara")
+        return ruta
+    finally:
+        cap.release()

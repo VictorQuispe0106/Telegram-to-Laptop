@@ -5,3 +5,4 @@ python-dotenv>=1.0.0
 flask>=3.0.0
 pymssql>=2.2.0
 pywinauto>=0.6.8
+opencv-python>=4.10.0

@@ -484,6 +484,7 @@ HELP_TEXT = (
     "/top — procesos que más RAM comen\n"
     "/apps — apps con ventana abierta\n"
     "/foto — captura de pantalla al chat\n"
+    "/camara — foto de la webcam (el LED se prende)\n"
     "/vpn — estado de la VPN (+ conectar/desconectar)\n"
     "/bloquear — bloquea la laptop (Win+L remoto)\n"
     "/limpiar — limpieza del disco C: (con preview y confirmación)\n"
@@ -518,7 +519,7 @@ def cmd_start(m):
     # barra persistente de botones (arriba del campo de texto)
     kb = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row("📊 Status", "📸 Foto", "🖥️ Apps")
-    kb.row("📶 VPN", "🧹 Disco", "🔒 Bloquear")
+    kb.row("📷 Cam", "📶 VPN", "🧹 Disco", "🔒 Bloquear")
     bot.send_message(m.chat.id, "⚡ Barra rápida activada:", reply_markup=kb)
 
 
@@ -810,6 +811,7 @@ def on_text(m):
         "📶 VPN": lambda: cmd_vpn(m),
         "🧹 Disco": lambda: bot.send_message(m.chat.id, disk_clean.preview(), reply_markup=confirmar_markup("diskclean")),
         "🔒 Bloquear": lambda: cmd_bloquear(m),
+        "📷 Cam": lambda: cmd_camara(m),
     }
     if m.text in mapa_barra:
         _chats_conocidos.add(m.chat.id)
@@ -977,6 +979,29 @@ def cmd_foto(m):
         reaccionar(m.chat.id, m.message_id, "⚡")
     except Exception as e:
         bot.reply_to(m, f"❌ {e}")
+
+
+@bot.message_handler(commands=["camara"])
+def cmd_camara(m):
+    if not allowed(m.from_user.id):
+        return
+    _chats_conocidos.add(m.chat.id)
+    aviso = bot.reply_to(m, "📷 Capturando la webcam… (el LED de la cámara se va a prender)")
+    try:
+        ruta = quick_actions.capture_webcam()
+        with open(ruta, "rb") as f:
+            bot.send_photo(m.chat.id, f, caption="📷 Webcam de la laptop")
+        Path(ruta).unlink(missing_ok=True)
+        try:
+            bot.edit_message_text("📷 Foto enviada arriba ⬆️", aviso.chat.id, aviso.message_id)
+        except Exception:
+            pass
+        reaccionar(m.chat.id, m.message_id, "⚡")
+    except Exception as e:
+        try:
+            bot.edit_message_text(f"❌ {e}", aviso.chat.id, aviso.message_id)
+        except Exception:
+            bot.reply_to(m, f"❌ {e}")
 
 
 @bot.message_handler(commands=["apps"])
@@ -1186,6 +1211,7 @@ def registrar_comandos_menu():
             telebot.types.BotCommand("quienhay", "Ventanas abiertas"),
             telebot.types.BotCommand("traer", "Traer ventana al frente"),
             telebot.types.BotCommand("foto", "Captura de pantalla"),
+            telebot.types.BotCommand("camara", "Foto de la webcam"),
             telebot.types.BotCommand("bloquear", "Bloquear la laptop"),
             telebot.types.BotCommand("forzar_cerrar", "Cerrar una app forzadamente"),
             telebot.types.BotCommand("limpiar", "Limpiar disco (preview)"),
