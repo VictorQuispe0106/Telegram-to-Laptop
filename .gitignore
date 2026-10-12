@@ -23,3 +23,9 @@ _test_*.py
 # Net scan runtime data
 net_nombres.json
 odd/
+
+# Tool index de Pi
+.codegraph/
+
+# Net scan runtime data no versionable
+net_known.json
