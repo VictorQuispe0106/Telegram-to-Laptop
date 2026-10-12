@@ -1,11 +1,13 @@
-"""watchdog.py — Centinela de la Mini App: server + tunel + boton del chat.
+"""watchdog.py — Centinela de la Mini App: server + boton del chat.
 
 Corre como daemon (arranque por Startup de Windows). Cada 5 min:
 1. mini_app_server.py (puerto 5577): si no responde, relanza (oculto).
-2. cloudflared: si no hay proceso, relanza el quick tunnel y recupera la URL.
-3. Si la URL del tunel cambio, re-registra el menu button del bot.
-4. El bot de Telegram (bot.py) se avisa a si mismo: si no responde,
+2. El bot de Telegram (bot.py) se avisa a si mismo: si no responde,
    lo relanza tambien (cubre caidas en crudo del proceso del bot).
+
+El túnel Pinggy NO se renueva solo: la sesión free cambia de URL a los ~60 min
+y eso rompía la Mini App sin aviso. La renovación es manual, vía el comando
+/renovar del bot (bot.py llama a renovar_tunel()).
 """
 import os
 import subprocess
@@ -126,8 +128,9 @@ def _miniapp_chat_id() -> str:
     return ""
 
 
-def registrar_boton(url: str):
-    """Re-registra el menu button + avisa al usuario."""
+def registrar_boton(url: str, avisar: bool = True):
+    """Re-registra el menu button + avisa al usuario (avisar=False evita el
+    mensaje cuando lo llama el propio bot en /renovar)."""
     chat_id = _miniapp_chat_id()
     if not chat_id:
         log("sin MINIAPP_CHAT_ID ni ALLOWED_USER_IDS -> registro de boton omitido")
@@ -147,23 +150,31 @@ def registrar_boton(url: str):
             menu_button=telebot.types.MenuButtonWebApp(
                 text="📋 Ocupabilidad",
                 web_app=telebot.types.WebAppInfo(url=url)))
-        b.send_message(int(chat_id),
-                       f"🔄 La app cambió de dirección (túnel renovado).\n"
-                       f"Nueva: {url}",
-                       reply_markup=kb)
+        if avisar:
+            b.send_message(int(chat_id),
+                           f"🔄 La app cambió de dirección (túnel renovado).\n"
+                           f"Nueva: {url}",
+                           reply_markup=kb)
         log(f"boton re-registrado con {url}")
     except Exception as e:
         log(f"error re-registrando boton: {e}")
 
 
 def lanzar_server():
-    subprocess.Popen(
-        ["powershell", "-NoProfile", "-Command",
-         f"Start-Process -WindowStyle Hidden '{PY}' -ArgumentList 'mini_app_server.py' "
-         f"-WorkingDirectory '{BASE}'"],
-        creationflags=subprocess.CREATE_NO_WINDOW,
-    )
-    log("mini_app_server relanzado")
+    """Directo desde Python con logs capturados: sin stderr invisible ya no
+    comemos 500 sin rastro (incidente del 07/10 en /api/estado)."""
+    try:
+        out = open(BASE / "tools" / "miniapp_out.log", "w", encoding="utf-8", errors="replace")
+        err = open(BASE / "tools" / "miniapp_err.log", "w", encoding="utf-8", errors="replace")
+        subprocess.Popen(
+            [PY, "mini_app_server.py"], cwd=str(BASE),
+            stdout=out, stderr=err,
+            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
+            close_fds=False,
+        )
+        log("mini_app_server relanzado")
+    except Exception as e:
+        log(f"error lanzando server: {e}")
 
 
 def lanzar_tunel():
@@ -187,6 +198,27 @@ def lanzar_tunel():
         log(f"error lanzando tunel: {e}")
 
 
+def renovar_tunel(timeout_s: int = 45) -> str:
+    """Renovación MANUAL del túnel: la llama el bot con /renovar.
+    Mata túneles zombis (Pinggy/Cloudflare), relanza la sesión Pinggy,
+    espera la URL nueva del log, la valida por HTTP, la guarda y
+    re-registra el botón. Devuelve la URL nueva, o '' si falló."""
+    matar_tunel()
+    lanzar_tunel()
+    limite = time.time() + timeout_s
+    while time.time() < limite:
+        time.sleep(5)
+        url = url_del_tunel()
+        # El log es nuevo (se reabre en 'w'), así que una URL acá es de esta sesión.
+        if url and http_ok(f"{url}/", timeout=10) is not None:
+            guardar_url(url)
+            registrar_boton(url, avisar=False)
+            log(f"tunel renovado manualmente: {url}")
+            return url
+    log("renovación manual: sin URL válida dentro del timeout")
+    return ""
+
+
 def lanzar_bot():
     subprocess.Popen(
         ["powershell", "-NoProfile", "-Command",
@@ -208,19 +240,8 @@ def ciclo():
         log("server MUERTO -> relanzando")
         lanzar_server()
         time.sleep(10)
-    # 2. tunel: si la URL no responde, matar zombis y relanzar SIEMPRE
-    url = url_del_tunel()
-    tunel_ok = bool(url) and http_ok(f"{url}/", timeout=15) is not None
-    if not tunel_ok:
-        log(f"tunel sin respuesta ({url or 'sin URL'}) -> relanzando")
-        matar_tunel()               # zombi: proceso vivo, tunel muerto
-        lanzar_tunel()
-        time.sleep(25)
-        url = url_del_tunel()
-    # 3. re-registrar si la url cambio
-    if url and url != url_registrada():
-        guardar_url(url)
-        registrar_boton(url)
+    # El túnel NO se toca en el ciclo: renovar solo cambia la URL y rompía la
+    # Mini App sin aviso. La renovación es manual via /renovar (renovar_tunel).
 
 
 def main():

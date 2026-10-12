@@ -49,13 +49,14 @@ def _miniapp_ids() -> set:
 
 ALLOWED_MINIAPP_IDS = _miniapp_ids()  # Victor
 
-import llenar_horas_automatico as llenar  # noqa: E402 (logica probada)
+import db as llenar  # noqa: E402 (capa DB unificada del proyecto OCUPABILIDAD)
+from config import AREA_FILTRO, HORAS_ASIGNADAS, PERFIL  # noqa: E402
 import pymssql  # noqa: E402
 
 app = Flask(__name__, static_folder=None)
 MINIAPP_DIR = BASE / "mini_app"
 
-AREA_FILTRO = llenar.PERFIL["nomareas"]
+# AREA_FILTRO/PERFIL/HORAS_ASIGNADAS vienen de config.py de OCUPABILIDAD
 
 
 def _conectar_bd():
@@ -115,8 +116,8 @@ def api_estado():
     try:
         cur = conn.cursor()
         idanalista = llenar.obtener_id(cur, "analista", "idanalista", "nomanalista",
-                                       "estanalista", llenar.PERFIL["nomanalista"])
-        ids = {k: llenar.obtener_id(cur, t, ci, cn, ce, llenar.PERFIL[v])
+                                       "estanalista", PERFIL["nomanalista"])
+        ids = {k: llenar.obtener_id(cur, t, ci, cn, ce, PERFIL[v])
                for k, t, ci, cn, ce, v in [
                    ("idcelda", "celda", "idcelda", "nomcelda", "estcelda", "nomcelda"),
                    ("idoficina", "oficina", "idoficina", "nomoficina", "estoficina", "nomoficina"),
@@ -137,7 +138,9 @@ def api_registrar():
         user = _usuario_de_initdata()
     except PermissionError as e:
         return jsonify({"error": str(e)}), 401
-    body = request.get_json(silent=True) or {}
+    # force=True: JSON sin Content-Type application/json tambien se parsea,
+    # asi un cliente sin header no activa una escritura real por accidente.
+    body = request.get_json(silent=True, force=True) or {}
     fecha = body.get("fecha") or datetime.date.today().isoformat()
     dry_run = bool(body.get("dry_run"))
     fecha_d = datetime.datetime.strptime(fecha, "%Y-%m-%d").date()
@@ -155,7 +158,7 @@ def api_registrar():
             "dry_run": dry_run,
             "modo": modo,
             "actividades": len(plan["actividades"]),
-            "horas": llenar.HORAS_ASIGNADAS,
+            "horas": HORAS_ASIGNADAS,
         })
     except Exception as e:
         if not dry_run:
@@ -201,12 +204,12 @@ def api_reportes():
         total_horas = 0.0
         total_dias = 0
         for row in cur.fetchall():
-            horas = float(row[2])
-            dias = int(row[1])
+            horas = float(row["total_horas"])
+            dias = int(row["dias_registrados"])
             total_horas += horas
             total_dias += dias
             analistas.append({
-                "nombre": row[0], "dias_registrados": dias, "total_horas": horas,
+                "nombre": row["nomanalista"], "dias_registrados": dias, "total_horas": horas,
             })
         for a in analistas:
             a["porcentaje"] = round(a["total_horas"] / total_horas * 100, 1) if total_horas > 0 else 0
@@ -214,7 +217,7 @@ def api_reportes():
             a["cumplimiento"] = round(a["dias_registrados"] / dias_del_mes * 100, 1)
 
         cur.execute("""
-            SELECT a.nomanalista, DAY(h.fechatrabajo), SUM(h.canthorasdecimal)
+            SELECT a.nomanalista as nombre, DAY(h.fechatrabajo) as dia, SUM(h.canthorasdecimal) as horas
             FROM horasasignadas h
             INNER JOIN analista a ON h.idanalista = a.idanalista
             INNER JOIN areas ar ON h.idareas = ar.idareas
@@ -224,18 +227,18 @@ def api_reportes():
             ORDER BY a.nomanalista, DAY(h.fechatrabajo)
         """, (mes_n, anio, AREA_FILTRO))
         evolucion: dict[str, dict[int, float]] = {}
-        for nombre, dia, horas in cur.fetchall():
-            evolucion.setdefault(nombre, {})[int(dia)] = float(horas or 0)
+        for r in cur.fetchall():
+            evolucion.setdefault(r["nombre"], {})[int(r["dia"])] = float(r["horas"] or 0)
 
         # heatmap propio: dias que llenó el usuario (Victor)
         cur.execute("""
-            SELECT DAY(h.fechatrabajo), SUM(h.canthorasdecimal)
+            SELECT DAY(h.fechatrabajo) as dia, SUM(h.canthorasdecimal) as horas
             FROM horasasignadas h
             INNER JOIN analista a ON h.idanalista = a.idanalista
             WHERE a.nomanalista = %s AND YEAR(h.fechatrabajo) = %s AND MONTH(h.fechatrabajo) = %s
             GROUP BY DAY(h.fechatrabajo), h.fechatrabajo
-        """, (llenar.PERFIL["nomanalista"], anio, mes_n))
-        dias_usuario = {int(d): float(h or 0) for d, h in cur.fetchall()}
+        """, (PERFIL["nomanalista"], anio, mes_n))
+        dias_usuario = {int(r["dia"]): float(r["horas"] or 0) for r in cur.fetchall()}
 
         return jsonify({
             "success": True,

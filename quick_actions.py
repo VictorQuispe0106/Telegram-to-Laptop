@@ -110,3 +110,78 @@ def clipboard_text() -> str:
             ctypes.windll.kernel32.GlobalUnlock(h)
     finally:
         u32.CloseClipboard()
+
+
+# ---------- webcam ----------
+def capture_webcam(ruta: str | None = None) -> str:
+    """Captura una foto de la webcam y devuelve la ruta del JPG.
+
+    El import de cv2 va aca (es pesado y solo se usa si alguien pide /camara).
+    Se prueban combinaciones (backend, indice) — DSHOW primero (el mas
+    confiable en Windows), despues MSMF — y de cada cap se lee hasta 30
+    veces con pausa, devolviendo el PRIMER frame valido. Eso cubre cams
+    que abren pero tardan en arrancar o entran en modo privacidad.
+    """
+    import tempfile
+
+    import cv2
+
+    combinaciones = [
+        (cv2.CAP_DSHOW, 0), (cv2.CAP_DSHOW, 1), (cv2.CAP_DSHOW, 2),
+        (cv2.CAP_MSMF, 0), (cv2.CAP_MSMF, 1), (cv2.CAP_MSMF, 2),
+    ]
+
+    alguna_abrio = False
+    for backend, idx in combinaciones:
+        cap = cv2.VideoCapture(idx, backend)
+        if not cap.isOpened():
+            cap.release()
+            continue
+        alguna_abrio = True
+        try:
+            # resolucion deseada (1280x720); si la cam no lo respeta, no pasa nada
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+            # warm-up: la cam necesita ~1-2s para estabilizar la exposicion
+            # (el LED prende, la imagen inicial sale oscura). Se leen hasta 30
+            # intentos con pausa ENTRE reads y se toma el PRIMER frame valido,
+            # NO un frame fijo: algunas cams tiran (False, None) mientras
+            # arrancan o estan en modo privacidad.
+            for _ in range(30):
+                ok, frame = cap.read()
+                if ok and frame is not None and getattr(frame, "shape", None) is not None:
+                    break
+                time.sleep(0.25)
+            else:
+                frame = None
+
+            if frame is not None:
+                # detector de privacidad: una cam con shutter electronico
+                # (tecla F8 / Lenovo Vantage) abre bien pero entrega frames
+                # 100% negros (brillo medio ~0.0 mientras una escena real, hasta
+                # de noche, queda por arriba de ~2). Corte en 1.5: si da menos,
+                # avisamos ANTES de guardar/mandar una foto inutil.
+                brillo = cv2.mean(frame)[0]
+                if brillo < 1.5:
+                    raise RuntimeError(
+                        "la cámara capturó una foto 100% negra — el sensor está "
+                        "cerrado por modo privacidad (tecla F8 de cámara o Lenovo Vantage)"
+                    )
+                if ruta is None:
+                    ruta = str(
+                        Path(tempfile.gettempdir())
+                        / ("spidervic_cam_" + time.strftime("%Y%m%d_%H%M%S") + ".jpg")
+                    )
+                if not cv2.imwrite(ruta, frame):
+                    raise RuntimeError("no se pudo guardar la foto de la cámara")
+                return ruta
+        finally:
+            cap.release()
+
+    if not alguna_abrio:
+        raise RuntimeError("no se encontró la cámara")
+    raise RuntimeError(
+        "la cámara no devolvió frames — probá que no esté en uso por otra app "
+        "(Zoom/Teams), sacala de modo privacidad y probá de nuevo"
+    )

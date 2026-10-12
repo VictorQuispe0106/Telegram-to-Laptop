@@ -43,6 +43,10 @@ import requests
 import telebot
 from dotenv import load_dotenv, find_dotenv
 
+# Módulos locales del proyecto (mismo directorio: script dir ya está en sys.path)
+# watchdog: renovación manual del túnel vía /renovar (sin ciclo propio al importar).
+import watchdog
+
 # ---------- config ----------
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(find_dotenv(str(BASE_DIR / ".env")))
@@ -480,6 +484,7 @@ HELP_TEXT = (
     "/top — procesos que más RAM comen\n"
     "/apps — apps con ventana abierta\n"
     "/foto — captura de pantalla al chat\n"
+    "/camara — foto de la webcam (el LED se prende)\n"
     "/vpn — estado de la VPN (+ conectar/desconectar)\n"
     "/bloquear — bloquea la laptop (Win+L remoto)\n"
     "/limpiar — limpieza del disco C: (con preview y confirmación)\n"
@@ -514,7 +519,7 @@ def cmd_start(m):
     # barra persistente de botones (arriba del campo de texto)
     kb = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row("📊 Status", "📸 Foto", "🖥️ Apps")
-    kb.row("📶 VPN", "🧹 Disco", "🔒 Bloquear")
+    kb.row("📷 Cam", "📶 VPN", "🧹 Disco", "🔒 Bloquear")
     bot.send_message(m.chat.id, "⚡ Barra rápida activada:", reply_markup=kb)
 
 
@@ -784,7 +789,10 @@ def encolar(chat_id: int, texto: str) -> int:
         return len(_cola)
 
 
-@bot.message_handler(func=lambda m: True, content_types=["text"])
+# FIX: el catch-all SOLO agarra texto que no es comando. Si agarrara
+# "/foto", taparía los handlers específicos de más abajo (orden telebot:
+# gana el primero). Los comandos los atienden sus handlers dedicados.
+@bot.message_handler(func=lambda m: not (m.text or "").strip().startswith("/"), content_types=["text"])
 def on_text(m):
     uid = m.from_user.id
     if not allowed(uid):
@@ -803,6 +811,7 @@ def on_text(m):
         "📶 VPN": lambda: cmd_vpn(m),
         "🧹 Disco": lambda: bot.send_message(m.chat.id, disk_clean.preview(), reply_markup=confirmar_markup("diskclean")),
         "🔒 Bloquear": lambda: cmd_bloquear(m),
+        "📷 Cam": lambda: cmd_camara(m),
     }
     if m.text in mapa_barra:
         _chats_conocidos.add(m.chat.id)
@@ -972,6 +981,48 @@ def cmd_foto(m):
         bot.reply_to(m, f"❌ {e}")
 
 
+@bot.message_handler(commands=["camara"])
+def cmd_camara(m):
+    if not allowed(m.from_user.id):
+        return
+    _chats_conocidos.add(m.chat.id)
+    aviso = bot.reply_to(m, "📷 Capturando la webcam… (el LED de la cámara se va a prender)")
+
+    resultado = {}
+    def _capturar():
+        try:
+            resultado["ruta"] = quick_actions.capture_webcam()
+        except Exception as e:
+            resultado["error"] = str(e)
+
+    h = threading.Thread(target=_capturar, daemon=True)
+    h.start()
+    h.join(timeout=45)
+    if h.is_alive():
+        resultado["error"] = "📷 Timeout: la cámara no respondió (¿otra app la tiene?)"
+    if "error" in resultado:
+        try:
+            bot.edit_message_text(f"❌ {resultado['error']}", aviso.chat.id, aviso.message_id)
+        except Exception:
+            bot.reply_to(m, f"❌ {resultado['error']}")
+        return
+    ruta = resultado["ruta"]
+    try:
+        with open(ruta, "rb") as f:
+            bot.send_photo(m.chat.id, f, caption="📷 Webcam de la laptop")
+        Path(ruta).unlink(missing_ok=True)
+        try:
+            bot.edit_message_text("📷 Foto enviada arriba ⬆️", aviso.chat.id, aviso.message_id)
+        except Exception:
+            pass
+        reaccionar(m.chat.id, m.message_id, "⚡")
+    except Exception as e:
+        try:
+            bot.edit_message_text(f"❌ {e}", aviso.chat.id, aviso.message_id)
+        except Exception:
+            bot.reply_to(m, f"❌ {e}")
+
+
 @bot.message_handler(commands=["apps"])
 def cmd_apps(m):
     if not allowed(m.from_user.id):
@@ -997,6 +1048,33 @@ def cmd_limpiar(m):
         return
     _chats_conocidos.add(m.chat.id)
     bot.send_message(m.chat.id, disk_clean.preview(), reply_markup=confirmar_markup("diskclean"))
+
+
+@bot.message_handler(commands=["renovar"])
+def cmd_renovar(m):
+    """Renueva el túnel Pinggy de la Mini App: link nuevo + botón re-registrado.
+    Manual a propósito: la sesión free cambia de URL a los ~60 min y la
+    renovación automática rompía la app sin aviso (feature tunel-renovacion-manual)."""
+    if not allowed(m.from_user.id):
+        return
+    _chats_conocidos.add(m.chat.id)
+    bot.reply_to(m, "🔄 Renovando el túnel de la Mini App (puede tardar ~45s)…")
+    try:
+        import watchdog
+        url = watchdog.renovar_tunel()
+    except Exception as e:
+        log.error("renovar: %s", e)
+        bot.reply_to(m, f"❌ Error renovando el túnel: {e}")
+        return
+    if not url:
+        bot.reply_to(m, "❌ No pude recuperar la URL nueva. Revisá tools/pinggy_out.log "
+                        "o probá de nuevo en un minuto.")
+        return
+    kb = telebot.types.InlineKeyboardMarkup()
+    kb.row(telebot.types.InlineKeyboardButton(
+        "📋 Abrir Ocupabilidad", web_app=telebot.types.WebAppInfo(url=url)))
+    bot.reply_to(m, f"✅ Link renovado:\n{url}", reply_markup=kb)
+    reaccionar(m.chat.id, m.message_id, "🔥")
 
 
 @bot.message_handler(commands=["vpn"])
@@ -1137,11 +1215,42 @@ def _enviar_alerta(texto: str, silenciosa: bool = False):
             pass
 
 
+def registrar_comandos_menu():
+    """Registra el menú '/' de Telegram (autocomplete). Sin set_my_commands el
+    comando responde igual, pero NO aparece al escribir / en el chat.
+    Aislado en try/except: un error acá no debe impedir el arranque del bot."""
+    try:
+        bot.set_my_commands([
+            telebot.types.BotCommand("start", "Ayuda y lista de comandos"),
+            telebot.types.BotCommand("estado", "Estado del asistente (RPC)"),
+            telebot.types.BotCommand("status", "Tarjeta de estado del sistema"),
+            telebot.types.BotCommand("top", "Procesos con más CPU"),
+            telebot.types.BotCommand("apps", "Apps abiertas"),
+            telebot.types.BotCommand("nombra", "Nombrar ventana activa"),
+            telebot.types.BotCommand("quienhay", "Ventanas abiertas"),
+            telebot.types.BotCommand("traer", "Traer ventana al frente"),
+            telebot.types.BotCommand("foto", "Captura de pantalla"),
+            telebot.types.BotCommand("camara", "Foto de la webcam"),
+            telebot.types.BotCommand("bloquear", "Bloquear la laptop"),
+            telebot.types.BotCommand("forzar_cerrar", "Cerrar una app forzadamente"),
+            telebot.types.BotCommand("limpiar", "Limpiar disco (preview)"),
+            telebot.types.BotCommand("vpn", "Estado de la VPN"),
+            telebot.types.BotCommand("renovar", "Renovar el link de la Mini App"),
+            telebot.types.BotCommand("reset", "Sesión nueva del agente"),
+            telebot.types.BotCommand("compact", "Compactar sesión del agente"),
+            telebot.types.BotCommand("id", "Ver tu user ID"),
+        ])
+        log.info("menú de comandos '/' registrado en Telegram")
+    except Exception as e:
+        log.error("set_my_commands: %s", e)
+
+
 if __name__ == "__main__":
     log.info("🕷️ SpiderVic Assistant v4 online — sesión %s | whitelist %s",
              SESSION_ID, sorted(ALLOWED_IDS) or "VACÍA")
     me = bot.get_me()
     log.info("bot: @%s (id %s)", me.username, me.id)
+    registrar_comandos_menu()
     threading.Thread(target=queue_worker, daemon=True).start()
     threading.Thread(target=_alertas_worker, daemon=True).start()
     bot.infinity_polling(timeout=60, long_polling_timeout=60)
